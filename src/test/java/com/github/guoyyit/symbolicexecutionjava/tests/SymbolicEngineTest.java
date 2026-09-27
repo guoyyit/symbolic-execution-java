@@ -24,14 +24,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SymbolicEngineTest {
 
     private List<PathReport> run(String src) {
+        return run(src, -1024, 1024, 128);
+    }
+
+    private List<PathReport> run(String src, long lo, long hi, int maxUnroll) {
         ResolvedProgram resolved = new Validator().validate(Parser.parseSource(src));
         Cfg cfg = new CfgBuilder().build(resolved);
-        EngineConfig config = new EngineConfig(0L, -1024, 1024);
+        EngineConfig config = new EngineConfig(0L, lo, hi);
         LinearSolver solver = new LinearSolver(config.seed(),
                 config.solverLowerBound(), config.solverUpperBound());
         SymbolicEngine engine = new SymbolicEngine(resolved, cfg, solver, config);
         List<PathReport> paths = new ArrayList<>();
-        ExecutionLimits limits = new ExecutionLimits(10_000, 1000, 128, 1_000_000, 100_000);
+        ExecutionLimits limits = new ExecutionLimits(10_000, 1000, maxUnroll, 1_000_000, 100_000);
         engine.run(limits, new AtomicBoolean(false), paths::add, null);
         return paths;
     }
@@ -190,5 +194,51 @@ class SymbolicEngineTest {
             assertEquals(a.get(i).inputModel(), b.get(i).inputModel());
             assertEquals(a.get(i).constraints(), b.get(i).constraints());
         }
+    }
+
+    @Test
+    void unrollCapReportsLimitReachedForSymbolicBound() {
+        // Symbolic bound n; with an unroll cap of 3, paths still iterating at i==3
+        // hit the cap and are reported LIMIT_REACHED rather than running forever.
+        List<PathReport> paths = run(
+                "int n; for (int i = 0; i < n; i = i + 1) { assert(i >= 0); }",
+                -8, 8, 3);
+        assertTrue(paths.stream().anyMatch(p -> p.outcome() == PathOutcome.LIMIT_REACHED),
+                paths.toString());
+        // Early-exit success paths still exist (small n values).
+        assertTrue(paths.stream().anyMatch(p -> p.outcome() == PathOutcome.SUCCESS),
+                paths.toString());
+    }
+
+    @Test
+    void conjunctionOfMutuallyExclusiveConstraintsPrunesWholePath() {
+        List<PathReport> paths = run("""
+                int x;
+                int y;
+                if (x >= 5 && y >= 5 && x + y <= 8) {
+                    assert(x == 100);
+                }
+                assert(x != 100 || y != 100);
+                """);
+        // then-branch is infeasible (x+y>=10 and x+y<=8) so its assertion is never
+        // reached; no path can report the inner assertion failure.
+        boolean innerFailure = paths.stream()
+                .anyMatch(p -> p.outcome() == PathOutcome.ASSERTION_FAILED
+                        && p.targetDescription().contains("100") && p.constraints().stream()
+                                .anyMatch(c -> c.contains(">= 5")));
+        assertFalse(innerFailure, paths.toString());
+    }
+
+    @Test
+    void satisfyingModelIsReproducibleWitness() {
+        List<PathReport> paths = run("int x; int y; assert(2*x + 3*y == 7);");
+        PathReport ok = paths.stream().filter(p -> p.outcome() == PathOutcome.SUCCESS)
+                .findFirst().orElseThrow();
+        long x = ok.inputModel().get("x");
+        long y = ok.inputModel().get("y");
+        assertEquals(7L, 2 * x + 3 * y);
+        // final concrete values equal the inputs for free variables
+        assertEquals(x, ok.finalValues().get("x"));
+        assertEquals(y, ok.finalValues().get("y"));
     }
 }

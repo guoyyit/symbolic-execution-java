@@ -79,6 +79,10 @@ public class SymbolicEngine {
 
         while (!ctx.work.isEmpty()) {
             throwIfCancelled(ctx);
+            if (ctx.backtracks > ctx.limits.maxBacktracks()) {
+                throw new ResourceLimitException(
+                        "exceeded maximum of " + ctx.limits.maxBacktracks() + " backtracks");
+            }
             if (ctx.limits.maxPaths() > 0 && ctx.reported >= ctx.limits.maxPaths()) {
                 throw new PathLimitException("reached maximum of "
                         + ctx.limits.maxPaths() + " reported paths");
