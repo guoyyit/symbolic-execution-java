@@ -101,6 +101,10 @@ public class AnalysisService {
     }
 
     public AnalysisResult resume(String jobId) {
+        return resume(jobId, null);
+    }
+
+    public AnalysisResult resume(String jobId, AnalysisRequest.AnalysisLimitsDto limitsDto) {
         SubmittedJob job = requireJob(jobId);
         Optional<Checkpoint> saved = checkpointStore.load(jobId);
         if (saved.isEmpty()) {
@@ -112,14 +116,20 @@ public class AnalysisService {
             throw new IllegalStateException("checkpoint belongs to a different program");
         }
         if (checkpoint.complete()) {
+            job.setStatus(JobStatus.COMPLETED);
             return toResult(job);
         }
+        if (job.status() == JobStatus.CANCELLED) {
+            throw new IllegalStateException("job was cancelled and cannot be resumed");
+        }
         PreparedProgram prepared = prepare(job.source());
-        job.paths().clear();
-        job.paths().addAll(checkpoint.paths());
+        synchronized (job.paths()) {
+            job.paths().clear();
+            job.paths().addAll(checkpoint.paths());
+        }
         job.cancellation().set(false);
         job.setStatus(JobStatus.QUEUED);
-        ExecutionLimits limits = resolveLimits(null);
+        ExecutionLimits limits = resolveLimits(limitsDto);
         schedule(job, prepared, limits, checkpoint);
         return toResult(job);
     }
@@ -128,14 +138,14 @@ public class AnalysisService {
 
     private void schedule(SubmittedJob job, PreparedProgram prepared, ExecutionLimits limits,
                           Checkpoint resumeFrom) {
+        long generation = job.nextGeneration();
         job.setStatus(JobStatus.RUNNING);
-        workers.submit(() -> runJob(job, prepared, limits, resumeFrom));
+        workers.submit(() -> runJob(job, prepared, limits, resumeFrom, generation));
     }
 
     private void runJob(SubmittedJob job, PreparedProgram prepared,
-                        ExecutionLimits limits, Checkpoint resumeFrom) {
+                        ExecutionLimits limits, Checkpoint resumeFrom, long generation) {
         job.setWorker(Thread.currentThread());
-        int skip = resumeFrom == null ? 0 : resumeFrom.reportedCount();
         try {
             LinearSolver solver = new LinearSolver(job.seed(),
                     config.getSolverLowerBound(), config.getSolverUpperBound());
@@ -145,29 +155,64 @@ public class AnalysisService {
                     solver, engineConfig);
 
             PathListener listener = report -> {
+                // A newer run (resume) supersedes this one: do not clobber its state.
+                if (job.generation() != generation) {
+                    return;
+                }
                 PathSnapshot snapshot = toSnapshot(report);
-                job.paths().add(snapshot);
-                // Commit before the path is considered discovered.
-                checkpointStore.save(job.checkpoint());
+                synchronized (job.paths()) {
+                    job.paths().add(snapshot);
+                    // Commit before the path is considered discovered.
+                    checkpointStore.save(job.checkpoint());
+                }
             };
 
             engine.run(limits, job.cancellation(), listener, resumeFrom);
+            if (job.generation() != generation) {
+                return;
+            }
             job.setComplete(true);
             checkpointStore.save(job.checkpoint());
             job.setStatus(JobStatus.COMPLETED);
         } catch (com.github.guoyyit.symbolicexecutionjava.engine.CancelledException e) {
+            if (job.generation() != generation) {
+                return;
+            }
             if (e.timeout()) {
-                // Retain the checkpoint so resume continues; no partial result
-                // is presented as a finished analysis.
+                // Persist whatever was durably committed so a later resume can
+                // continue from the last reported path. No partial result is
+                // presented as a finished analysis.
+                synchronized (job.paths()) {
+                    if (!job.paths().isEmpty()) {
+                        checkpointStore.save(job.checkpoint());
+                    }
+                }
                 job.setStatus(JobStatus.TIMEOUT);
             } else {
                 job.setStatus(JobStatus.CANCELLED);
             }
+        } catch (com.github.guoyyit.symbolicexecutionjava.engine.PathLimitException e) {
+            if (job.generation() != generation) {
+                return;
+            }
+            // Reached the path budget: persist an INCOMPLETE checkpoint so a
+            // later resume can enumerate the rest. No partial result is shown.
+            synchronized (job.paths()) {
+                if (!job.paths().isEmpty()) {
+                    checkpointStore.save(job.checkpoint());
+                }
+            }
+            job.setStatus(JobStatus.LIMITED);
         } catch (RuntimeException e) {
+            if (job.generation() != generation) {
+                return;
+            }
             job.setStatus(JobStatus.FAILED);
             job.setError(e.getMessage());
         } finally {
-            job.setWorker(null);
+            if (job.generation() == generation) {
+                job.setWorker(null);
+            }
         }
     }
 
@@ -222,7 +267,8 @@ public class AnalysisService {
         long failure = snapshot.stream()
                 .filter(p -> p.outcome() == PathOutcome.ASSERTION_FAILED).count();
         boolean hidePartial = job.status() == JobStatus.CANCELLED
-                || job.status() == JobStatus.TIMEOUT;
+                || job.status() == JobStatus.TIMEOUT
+                || job.status() == JobStatus.LIMITED;
         List<AnalysisResult.PathView> exposed = hidePartial ? List.of() : views;
         int total = hidePartial ? 0 : snapshot.size();
         return new AnalysisResult(job.id(), job.status(), total,

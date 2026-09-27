@@ -38,7 +38,8 @@ public class AnalysisController {
     }
 
     @PostMapping("/{jobId}/resume")
-    public AnalysisResult resume(@PathVariable String jobId) {
-        return service.resume(jobId);
+    public AnalysisResult resume(@PathVariable String jobId,
+                                 @RequestBody(required = false) AnalysisRequest request) {
+        return service.resume(jobId, request == null ? null : request.limits());
     }
 }

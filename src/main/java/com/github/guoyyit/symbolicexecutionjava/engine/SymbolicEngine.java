@@ -80,7 +80,8 @@ public class SymbolicEngine {
         while (!ctx.work.isEmpty()) {
             throwIfCancelled(ctx);
             if (ctx.limits.maxPaths() > 0 && ctx.reported >= ctx.limits.maxPaths()) {
-                return;
+                throw new PathLimitException("reached maximum of "
+                        + ctx.limits.maxPaths() + " reported paths");
             }
             // A path is processed one frame at a time. stepOne tells us whether
             // the same path remains at the head (CONTINUE) or has been consumed

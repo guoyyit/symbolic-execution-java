@@ -21,6 +21,7 @@ final class SubmittedJob {
     private volatile Thread worker;
     private volatile boolean complete;
     private volatile long seed;
+    private volatile long generation;
 
     SubmittedJob(String id, String programHash, String source, long seed) {
         this.id = id;
@@ -75,6 +76,14 @@ final class SubmittedJob {
 
     void setComplete(boolean complete) {
         this.complete = complete;
+    }
+
+    long generation() {
+        return generation;
+    }
+
+    long nextGeneration() {
+        return ++generation;
     }
 
     String error() {
