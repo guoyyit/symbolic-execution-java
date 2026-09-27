@@ -19,6 +19,7 @@ import com.github.guoyyit.symbolicexecutionjava.solver.LinearSolver;
 import com.github.guoyyit.symbolicexecutionjava.validation.ResolvedProgram;
 import com.github.guoyyit.symbolicexecutionjava.validation.ValidationException;
 import com.github.guoyyit.symbolicexecutionjava.validation.Validator;
+import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -330,7 +331,8 @@ public class AnalysisService {
     private record PreparedProgram(ResolvedProgram resolved, Cfg cfg) {
     }
 
-    // Exposed for graceful shutdown.
+    /** Graceful Spring shutdown: stop accepting work and interrupt running tasks. */
+    @PreDestroy
     public void shutdown() {
         workers.shutdownNow();
         try {
