@@ -58,11 +58,11 @@ public class SymbolicEngine {
 
     public void run(ExecutionLimits limits, AtomicBoolean cancelled,
                     PathListener listener, Checkpoint resumeFrom) {
+        // Resume replays the identical deterministic enumeration. Paths are
+        // numbered by their fixed position in that enumeration (0..n-1); when
+        // resuming we skip the already committed prefix and emit only the
+        // suffix, whose ids continue the same global numbering.
         int skip = resumeFrom == null ? 0 : resumeFrom.reportedCount();
-        int nextId = resumeFrom == null
-                ? 0
-                : resumeFrom.paths().stream().mapToInt(com.github.guoyyit.symbolicexecutionjava.checkpoint.PathSnapshot::pathId)
-                        .max().orElse(-1) + 1;
 
         long deadlineNanos = limits.timeoutMillis() <= 0
                 ? Long.MAX_VALUE
@@ -70,7 +70,7 @@ public class SymbolicEngine {
 
         Context ctx = new Context(limits, cancelled, listener, deadlineNanos);
         ctx.skip = skip;
-        ctx.nextId = nextId;
+        ctx.nextId = 0;
 
         PathState initial = new PathState(new SymbolicStore(), PathCondition.empty());
         Deque<Frame> initStack = new ArrayDeque<>();

@@ -15,6 +15,6 @@ public class AnalysisConfiguration {
 
     @Bean
     public CheckpointStore checkpointStore(ServiceConfig config) {
-        return new FileCheckpointStore(Path.of(config.checkpointDir()));
+        return new FileCheckpointStore(Path.of(config.getCheckpointDir()));
     }
 }
