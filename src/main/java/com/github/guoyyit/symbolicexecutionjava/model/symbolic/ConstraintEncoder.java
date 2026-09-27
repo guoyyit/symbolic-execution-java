@@ -50,14 +50,6 @@ public final class ConstraintEncoder {
         throw new IllegalArgumentException("unsupported expression: " + expr);
     }
 
-    /** One minterm: a conjunction of linear constraints. */
-    public static List<LinearConstraint> encodeConjunction(Cond cond, boolean polarity,
-                                                           SymbolicStore store) {
-        List<LinearConstraint> out = new ArrayList<>();
-        collectConjuncts(cond, polarity, store, out);
-        return out;
-    }
-
     /**
      * Expands a condition (with a requested polarity) to DNF: a list of
      * conjunctions, where satisfying any conjunction satisfies the condition.
@@ -115,34 +107,6 @@ public final class ConstraintEncoder {
         }
     }
 
-    private static void collectConjuncts(Cond cond, boolean polarity, SymbolicStore store,
-                                         List<LinearConstraint> out) {
-        if (cond instanceof Cond.Rel rel) {
-            out.add(toConstraint(rel, polarity, store));
-            return;
-        }
-        if (cond instanceof Cond.And and) {
-            if (polarity) {
-                collectConjuncts(and.left(), true, store, out);
-                collectConjuncts(and.right(), true, store, out);
-            } else {
-                throw new DisjunctiveConditionException();
-            }
-            return;
-        }
-        if (cond instanceof Cond.Or or) {
-            if (polarity) {
-                throw new DisjunctiveConditionException();
-            }
-            collectConjuncts(or.left(), false, store, out);
-            collectConjuncts(or.right(), false, store, out);
-            return;
-        }
-        if (cond instanceof Cond.Not not) {
-            collectConjuncts(not.inner(), !polarity, store, out);
-        }
-    }
-
     private static LinearConstraint toConstraint(Cond.Rel rel, boolean polarity,
                                                  SymbolicStore store) {
         AffineExpr l = linear(rel.left(), store);
@@ -171,12 +135,5 @@ public final class ConstraintEncoder {
             copy.add(new ArrayList<>(m));
         }
         return copy;
-    }
-
-    /** Signals that a non-DNF conjunction path encountered a disjunction. */
-    public static final class DisjunctiveConditionException extends RuntimeException {
-        public DisjunctiveConditionException() {
-            super("condition contains a disjunction and must be split by the explorer");
-        }
     }
 }
